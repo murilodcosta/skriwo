@@ -5,6 +5,7 @@ import com.murilodcosta.flashpad_api.dto.PadUpdateEvent;
 import com.murilodcosta.flashpad_api.dto.UpdateNoteRequest;
 import com.murilodcosta.flashpad_api.entity.Note;
 import com.murilodcosta.flashpad_api.exception.NoteNotFoundException;
+import com.murilodcosta.flashpad_api.exception.PayloadTooLargeException;
 import com.murilodcosta.flashpad_api.exception.VersionConflictException;
 import com.murilodcosta.flashpad_api.repository.NoteRepository;
 import com.murilodcosta.flashpad_api.util.SlugValidator;
@@ -22,6 +23,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 @Service
 public class NoteService {
+
+    public static final int MAX_CONTENT_LENGTH = 200_000; // ~200 KB
 
     private final NoteRepository noteRepository;
 
@@ -44,6 +47,11 @@ public class NoteService {
     public NoteResponse upsertNote(String rawSlug, UpdateNoteRequest request) {
         String slug = SlugValidator.validate(rawSlug);
         String content = request != null ? request.content() : null;
+
+        if (content != null && content.length() > MAX_CONTENT_LENGTH) {
+            throw new PayloadTooLargeException("Pad content exceeds maximum allowed limit of " + MAX_CONTENT_LENGTH + " characters (200 KB)");
+        }
+
         Long expectedVersion = request != null ? request.version() : null;
         String clientId = request != null ? request.clientId() : null;
 

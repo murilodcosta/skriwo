@@ -5,6 +5,7 @@ import com.murilodcosta.flashpad_api.dto.UpdateNoteRequest;
 import com.murilodcosta.flashpad_api.entity.Note;
 import com.murilodcosta.flashpad_api.exception.InvalidSlugException;
 import com.murilodcosta.flashpad_api.exception.NoteNotFoundException;
+import com.murilodcosta.flashpad_api.exception.PayloadTooLargeException;
 import com.murilodcosta.flashpad_api.exception.VersionConflictException;
 import com.murilodcosta.flashpad_api.repository.NoteRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -189,6 +190,20 @@ class NoteServiceTest {
         assertThat(response).isNotNull();
         assertThat(response.slug()).isEqualTo(slug);
         assertThat(response.content()).isNull();
+    }
+
+    @Test
+    @DisplayName("Should throw PayloadTooLargeException when content exceeds maximum allowed length")
+    void shouldThrowPayloadTooLargeWhenContentExceedsLimit() {
+        String slug = "large-note";
+        String oversizedContent = "x".repeat(NoteService.MAX_CONTENT_LENGTH + 1);
+        UpdateNoteRequest request = new UpdateNoteRequest(oversizedContent);
+
+        assertThatThrownBy(() -> noteService.upsertNote(slug, request))
+                .isInstanceOf(PayloadTooLargeException.class)
+                .hasMessageContaining("exceeds maximum allowed limit");
+
+        verify(noteRepository, never()).saveAndFlush(any());
     }
 
     @Test

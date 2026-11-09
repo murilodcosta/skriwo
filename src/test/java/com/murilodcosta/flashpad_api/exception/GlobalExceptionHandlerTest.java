@@ -84,6 +84,20 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("Should return 413 ProblemDetail for PayloadTooLargeException")
+    void shouldHandlePayloadTooLargeException() {
+        PayloadTooLargeException exception = new PayloadTooLargeException("Pad content exceeds maximum allowed limit of 200,000 characters (200 KB)");
+
+        ProblemDetail problemDetail = exceptionHandler.handlePayloadTooLargeException(exception);
+
+        assertThat(problemDetail).isNotNull();
+        assertThat(problemDetail.getStatus()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE.value());
+        assertThat(problemDetail.getTitle()).isEqualTo("Payload Too Large");
+        assertThat(problemDetail.getDetail()).isEqualTo("Pad content exceeds maximum allowed limit of 200,000 characters (200 KB)");
+        assertThat(problemDetail.getProperties()).containsKey("timestamp");
+    }
+
+    @Test
     @DisplayName("Should return 400 ProblemDetail with field errors for MethodArgumentNotValidException")
     @SuppressWarnings("unchecked")
     void shouldHandleValidationException() {

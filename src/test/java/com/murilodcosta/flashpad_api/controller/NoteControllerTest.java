@@ -5,6 +5,7 @@ import com.murilodcosta.flashpad_api.dto.UpdateNoteRequest;
 import com.murilodcosta.flashpad_api.exception.GlobalExceptionHandler;
 import com.murilodcosta.flashpad_api.exception.InvalidSlugException;
 import com.murilodcosta.flashpad_api.exception.NoteNotFoundException;
+import com.murilodcosta.flashpad_api.exception.PayloadTooLargeException;
 import com.murilodcosta.flashpad_api.exception.VersionConflictException;
 import com.murilodcosta.flashpad_api.service.NoteService;
 import org.junit.jupiter.api.DisplayName;
@@ -159,16 +160,18 @@ class NoteControllerTest {
     }
 
     @Test
-    @DisplayName("PUT /api/pads/{slug} with content exceeding max length should return 400 Bad Request")
-    void shouldReturn400WhenContentExceedsMaxLength() throws Exception {
-        String oversizedContent = "a".repeat(100_001);
+    @DisplayName("PUT /api/pads/{slug} with content exceeding max length should return 413 Payload Too Large")
+    void shouldReturn413WhenContentExceedsMaxLength() throws Exception {
+        when(noteService.upsertNote(eq("oversized"), any(UpdateNoteRequest.class)))
+                .thenThrow(new PayloadTooLargeException("Pad content exceeds maximum allowed limit of 200,000 characters (200 KB)"));
 
         mockMvc.perform(put("/api/pads/oversized")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"content\":\"" + oversizedContent + "\"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.status").value(400))
-                .andExpect(jsonPath("$.errors.content").value("Content cannot exceed 100,000 characters"));
+                        .content("{\"content\":\"oversized content\"}"))
+                .andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.status").value(413))
+                .andExpect(jsonPath("$.title").value("Payload Too Large"))
+                .andExpect(jsonPath("$.detail").value("Pad content exceeds maximum allowed limit of 200,000 characters (200 KB)"));
     }
 
     @Test
