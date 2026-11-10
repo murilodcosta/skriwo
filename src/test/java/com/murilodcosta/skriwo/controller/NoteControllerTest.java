@@ -1,0 +1,188 @@
+package com.murilodcosta.skriwo.controller;
+
+import com.murilodcosta.skriwo.dto.NoteResponse;
+import com.murilodcosta.skriwo.dto.UpdateNoteRequest;
+import com.murilodcosta.skriwo.exception.GlobalExceptionHandler;
+import com.murilodcosta.skriwo.exception.InvalidSlugException;
+import com.murilodcosta.skriwo.exception.NoteNotFoundException;
+import com.murilodcosta.skriwo.exception.PayloadTooLargeException;
+import com.murilodcosta.skriwo.exception.VersionConflictException;
+import com.murilodcosta.skriwo.service.NoteService;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.time.LocalDateTime;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@WebMvcTest(controllers = {NoteController.class, GlobalExceptionHandler.class})
+class NoteControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockitoBean
+    private NoteService noteService;
+
+    @Test
+    @DisplayName("GET /api/pads/{slug} should return 200 and NoteResponse with version for valid slug")
+    void shouldReturnNoteForValidSlug() throws Exception {
+        NoteResponse response = new NoteResponse(
+                "test-note",
+                "Hello World",
+                0L,
+                LocalDateTime.of(2026, 9, 28, 12, 0),
+                null
+        );
+
+        when(noteService.getNoteBySlug("test-note")).thenReturn(response);
+
+        mockMvc.perform(get("/api/pads/test-note"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.slug").value("test-note"))
+                .andExpect(jsonPath("$.content").value("Hello World"))
+                .andExpect(jsonPath("$.version").value(0));
+
+        verify(noteService).getNoteBySlug("test-note");
+    }
+
+    @Test
+    @DisplayName("GET /api/pads/{slug} should return 404 ProblemDetail when note does not exist")
+    void shouldReturn404WhenNoteNotFound() throws Exception {
+        when(noteService.getNoteBySlug("unknown"))
+                .thenThrow(new NoteNotFoundException("Note not found with slug: unknown"));
+
+        mockMvc.perform(get("/api/pads/unknown"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.title").value("Note Not Found"))
+                .andExpect(jsonPath("$.detail").value("Note not found with slug: unknown"))
+                .andExpect(jsonPath("$.status").value(404));
+
+        verify(noteService).getNoteBySlug("unknown");
+    }
+
+    @Test
+    @DisplayName("GET /api/pads/{slug} should return 400 ProblemDetail when slug is invalid or reserved")
+    void shouldReturn400WhenSlugIsInvalid() throws Exception {
+        when(noteService.getNoteBySlug("api"))
+                .thenThrow(new InvalidSlugException("The slug 'api' is reserved and cannot be used."));
+
+        mockMvc.perform(get("/api/pads/api"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Invalid Slug"))
+                .andExpect(jsonPath("$.detail").value("The slug 'api' is reserved and cannot be used."))
+                .andExpect(jsonPath("$.status").value(400));
+
+        verify(noteService).getNoteBySlug("api");
+    }
+
+    @Test
+    @DisplayName("PUT /api/pads/{slug} should parse JSON body with version and clientId into UpdateNoteRequest")
+    void shouldUpsertNoteWithJsonBody() throws Exception {
+        NoteResponse response = new NoteResponse(
+                "my-note",
+                "Saved content",
+                1L,
+                LocalDateTime.of(2026, 9, 28, 12, 0),
+                LocalDateTime.of(2026, 9, 28, 12, 5)
+        );
+
+        when(noteService.upsertNote(eq("my-note"), any(UpdateNoteRequest.class)))
+                .thenReturn(response);
+
+        mockMvc.perform(put("/api/pads/my-note")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"Saved content\",\"version\":0,\"clientId\":\"client-123\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.slug").value("my-note"))
+                .andExpect(jsonPath("$.content").value("Saved content"))
+                .andExpect(jsonPath("$.version").value(1));
+
+        ArgumentCaptor<UpdateNoteRequest> captor = ArgumentCaptor.forClass(UpdateNoteRequest.class);
+        verify(noteService).upsertNote(eq("my-note"), captor.capture());
+        assertThat(captor.getValue().content()).isEqualTo("Saved content");
+        assertThat(captor.getValue().version()).isEqualTo(0L);
+        assertThat(captor.getValue().clientId()).isEqualTo("client-123");
+    }
+
+    @Test
+    @DisplayName("PUT /api/pads/{slug} should return 409 ProblemDetail on VersionConflictException")
+    void shouldReturn409OnVersionConflict() throws Exception {
+        when(noteService.upsertNote(eq("conflicted-note"), any(UpdateNoteRequest.class)))
+                .thenThrow(new VersionConflictException(3L, "Server modified content"));
+
+        mockMvc.perform(put("/api/pads/conflicted-note")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"My stale content\",\"version\":1,\"clientId\":\"client-456\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Version Conflict"))
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.currentVersion").value(3))
+                .andExpect(jsonPath("$.currentContent").value("Server modified content"));
+    }
+
+    @Test
+    @DisplayName("PUT /api/pads/{slug} without request body should pass null request to service")
+    void shouldUpsertNoteWithoutBody() throws Exception {
+        NoteResponse response = new NoteResponse(
+                "empty-note",
+                null,
+                0L,
+                LocalDateTime.of(2026, 9, 28, 12, 0),
+                null
+        );
+
+        when(noteService.upsertNote(eq("empty-note"), eq(null)))
+                .thenReturn(response);
+
+        mockMvc.perform(put("/api/pads/empty-note"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.slug").value("empty-note"))
+                .andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.version").value(0));
+
+        verify(noteService).upsertNote("empty-note", null);
+    }
+
+    @Test
+    @DisplayName("PUT /api/pads/{slug} with content exceeding max length should return 413 Payload Too Large")
+    void shouldReturn413WhenContentExceedsMaxLength() throws Exception {
+        when(noteService.upsertNote(eq("oversized"), any(UpdateNoteRequest.class)))
+                .thenThrow(new PayloadTooLargeException("Pad content exceeds maximum allowed limit of 200,000 characters (200 KB)"));
+
+        mockMvc.perform(put("/api/pads/oversized")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"oversized content\"}"))
+                .andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.status").value(413))
+                .andExpect(jsonPath("$.title").value("Payload Too Large"))
+                .andExpect(jsonPath("$.detail").value("Pad content exceeds maximum allowed limit of 200,000 characters (200 KB)"));
+    }
+
+    @Test
+    @DisplayName("GET /api/pads/{slug}/stream should subscribe to SSE and return 200")
+    void shouldSubscribeToNoteStream() throws Exception {
+        SseEmitter emitter = new SseEmitter();
+        when(noteService.subscribeToNoteStream("my-note")).thenReturn(emitter);
+
+        mockMvc.perform(get("/api/pads/my-note/stream"))
+                .andExpect(status().isOk());
+
+        verify(noteService).subscribeToNoteStream("my-note");
+    }
+}
